@@ -19,6 +19,7 @@ export default class FrameView extends ModuleView<Frame, HTMLIFrameElement> {
   }
 
   dragging = false;
+  loaded = false;
   droppable?: Droppable;
   rect?: DOMRect;
 
@@ -32,8 +33,7 @@ export default class FrameView extends ModuleView<Frame, HTMLIFrameElement> {
   constructor(model: Frame, view?: FrameWrapView) {
     super({ model });
     bindAll(this, 'updateClientY', 'stopAutoscroll', 'autoscroll', '_emitUpdate');
-    const { el, em } = this;
-    //el = em.config.el
+    const { el } = this;
     //@ts-ignore
     this.module._config = {
       ...(this.config || {}),
@@ -41,7 +41,6 @@ export default class FrameView extends ModuleView<Frame, HTMLIFrameElement> {
       frameView: this,
       //canvasView: view?.cv
     };
-    //console.log(this.config)
     this.frameWrapView = view;
     this.showGlobalTools = debounce(this.showGlobalTools.bind(this), 50);
     const cvModel = this.getCanvasModel();
@@ -256,9 +255,10 @@ export default class FrameView extends ModuleView<Frame, HTMLIFrameElement> {
   }
 
   render() {
-    const { $el, ppfx } = this;
+    const { $el, ppfx, em } = this;
     $el.attr({ class: `${ppfx}frame` });
     this.renderScripts();
+    em.trigger('frame:render', this);
     return this;
   }
 
@@ -452,9 +452,12 @@ export default class FrameView extends ModuleView<Frame, HTMLIFrameElement> {
     );
 
     this._toggleEffects(true);
+
     if (hasDnd(em)) {
       this.droppable = new Droppable(em, this.wrapper?.el);
     }
+
+    this.loaded = true;
     model.trigger('loaded');
   }
 

@@ -1,15 +1,17 @@
-import { isEmpty, each, keys, result } from 'underscore';
-import Component from '../model/Component';
-import Components from '../model/Components';
-import ComponentsView from './ComponentsView';
+import { each, isEmpty, keys, result } from 'underscore';
+import FrameView from '../../canvas/view/FrameView';
+import { ExtractMethods, ObjectAny, View } from '../../common';
+import { GetSetRuleOptions } from '../../css_composer';
+import Editor from '../../editor';
+import EditorModel from '../../editor/model/Editor';
 import Selectors from '../../selector_manager/model/Selectors';
 import { replaceWith } from '../../utils/dom';
 import { setViewEl } from '../../utils/mixins';
-import { ObjectAny, View } from '../../common';
-import { ComponentOptions } from '../model/types';
-import EditorModel from '../../editor/model/Editor';
 import { DomComponentsConfig } from '../config/config';
-import Editor from '../../editor';
+import Component, { avoidInline } from '../model/Component';
+import Components from '../model/Components';
+import { ComponentOptions } from '../model/types';
+import ComponentsView from './ComponentsView';
 
 type ClbObj = ReturnType<ComponentView['_clbObj']>;
 
@@ -19,6 +21,8 @@ interface Rect {
   bottom?: number;
   right?: number;
 }
+
+export interface IComponentView extends ExtractMethods<ComponentView> {}
 
 export default class ComponentView extends View</**
  * Keep this format to avoid errors in TS bundler */
@@ -85,6 +89,14 @@ Component> {
     };
     this.delegateEvents();
     !modelOpt.temporary && this.init(this._clbObj());
+  }
+
+  get __cmpStyleOpts(): GetSetRuleOptions {
+    return { state: '', mediaText: '' };
+  }
+
+  get frameView(): FrameView {
+    return this.opts.config.frameView;
   }
 
   __isDraggable() {
@@ -274,9 +286,10 @@ Component> {
   updateStyle(m?: any, v?: any, opts: ObjectAny = {}) {
     const { model, em } = this;
 
-    if (em && em.getConfig().avoidInlineStyle && !opts.inline) {
-      const style = model.getStyle();
-      !isEmpty(style) && model.setStyle(style);
+    if (avoidInline(em) && !opts.inline) {
+      const styleOpts = this.__cmpStyleOpts;
+      const style = model.getStyle(styleOpts);
+      !isEmpty(style) && model.setStyle(style, styleOpts);
     } else {
       this.setAttribute('style', model.styleToString(opts));
     }
@@ -353,7 +366,7 @@ Component> {
    * @private
    * */
   updateContent() {
-    const content = this.model.get('content')!;
+    const { content } = this.model;
     const hasComps = this.model.components().length;
     this.getChildrenContainer().innerHTML = hasComps ? '' : content;
   }

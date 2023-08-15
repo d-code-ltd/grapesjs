@@ -49,15 +49,21 @@
 
 import { isUndefined } from 'underscore';
 import { Module } from '../abstract';
+import { Coordinates } from '../common';
+import Component from '../dom_components/model/Component';
 import EditorModel from '../editor/model/Editor';
 import { getElement, getViewEl } from '../utils/mixins';
 import defaults, { CanvasConfig } from './config/config';
 import Canvas from './model/Canvas';
 import Frame from './model/Frame';
-import CanvasView from './view/CanvasView';
+import CanvasView, { FitViewportOptions } from './view/CanvasView';
 import FrameView from './view/FrameView';
 
 export type CanvasEvent = 'canvas:dragenter' | 'canvas:dragover' | 'canvas:drop' | 'canvas:dragend' | 'canvas:dragdata';
+
+export interface ToWorldOption {
+  toWorld?: boolean;
+}
 
 export default class CanvasModule extends Module<CanvasConfig> {
   /**
@@ -95,7 +101,7 @@ export default class CanvasModule extends Module<CanvasConfig> {
     return this;
   }
 
-  onLoad() {
+  postLoad() {
     this.model.init();
   }
 
@@ -402,10 +408,6 @@ export default class CanvasModule extends Module<CanvasConfig> {
       const scroll = top ? scrollTop : scrollLeft;
       const offset = top ? offsetTop : offsetLeft;
 
-      // if (!top) {
-      //   console.log('LEFT', { posLeft: pos[side], scroll, offset }, el);
-      // }
-
       return pos[side] - (scroll - offset) * zoom;
     };
 
@@ -415,41 +417,53 @@ export default class CanvasModule extends Module<CanvasConfig> {
     };
   }
 
-  getTargetToElementFixed(el: any, elToMove: any, opts: any = {}) {
-    const pos = opts.pos || this.getElementPos(el);
-    const cvOff = opts.canvasOff || this.canvasRectOffset(el, pos);
-    const toolbarH = elToMove.offsetHeight || 0;
-    const toolbarW = elToMove.offsetWidth || 0;
-    const elRight = pos.left + pos.width;
-    const cv = this.getCanvasView();
-    const frCvOff = cv.getPosition();
-    const frameOffset = cv.getFrameOffset(el);
+  /**
+   *
+   * @param {HTMLElement} el The component element in the canvas
+   * @param {HTMLElement} targetEl The target element to position (eg. toolbar)
+   * @param {Object} opts
+   * @private
+   */
+  getTargetToElementFixed(el: HTMLElement, targetEl: HTMLElement, opts: any = {}) {
+    const elRect = opts.pos || this.getElementPos(el, { noScroll: true });
+    const canvasOffset = opts.canvasOff || this.canvasRectOffset(el, elRect);
+    const targetHeight = targetEl.offsetHeight || 0;
+    const targetWidth = targetEl.offsetWidth || 0;
+    const elRight = elRect.left + elRect.width;
+    const canvasView = this.getCanvasView();
+    const canvasRect = canvasView.getPosition();
+    const frameOffset = canvasView.getFrameOffset(el);
     const { event } = opts;
 
-    let top = -toolbarH;
-    let left = !isUndefined(opts.left) ? opts.left : pos.width - toolbarW;
-    left = pos.left < -left ? -pos.left : left;
-    const frCvWidth = frCvOff?.width ?? 0;
-    left = elRight > frCvWidth ? left - (elRight - frCvWidth) : left;
+    let top = -targetHeight;
+    let left = !isUndefined(opts.left) ? opts.left : elRect.width - targetWidth;
+    left = elRect.left < -left ? -elRect.left : left;
+    left = elRight > canvasRect.width ? left - (elRight - canvasRect.width) : left;
 
-    // Scroll with the window if the top edge is reached and the
-    // element is bigger than the canvas
-    const fullHeight = pos.height + toolbarH;
-    const elIsShort = fullHeight < frameOffset.height;
+    // Check when the target top edge reaches the top of the viewable canvas
+    if (canvasOffset.top < targetHeight) {
+      const fullHeight = elRect.height + targetHeight;
+      const elIsShort = fullHeight < frameOffset.height;
 
-    if (cvOff.top < toolbarH) {
+      // Scroll with the window if the top edge is reached and the
+      // element is bigger than the canvas
       if (elIsShort) {
         top = top + fullHeight;
       } else {
-        top = -cvOff.top < pos.height ? -cvOff.top : pos.height;
+        top = -canvasOffset.top < elRect.height ? -canvasOffset.top : elRect.height;
       }
     }
 
     const result = {
       top,
       left,
-      canvasOffsetTop: cvOff.top,
-      canvasOffsetLeft: cvOff.left,
+      canvasOffsetTop: canvasOffset.top,
+      canvasOffsetLeft: canvasOffset.left,
+      elRect,
+      canvasOffset,
+      canvasRect,
+      targetWidth,
+      targetHeight,
     };
 
     // In this way I can catch data and also change the position strategy
@@ -574,8 +588,8 @@ export default class CanvasModule extends Module<CanvasConfig> {
    * @example
    * canvas.setZoom(50); // set zoom to 50%
    */
-  setZoom(value: string) {
-    this.canvas.set('zoom', parseFloat(value));
+  setZoom(value: number | string) {
+    this.canvas.set('zoom', typeof value === 'string' ? parseFloat(value) : value);
     return this;
   }
 
@@ -598,8 +612,27 @@ export default class CanvasModule extends Module<CanvasConfig> {
    * @example
    * canvas.setCoords(100, 100);
    */
-  setCoords(x: string, y: string) {
-    this.canvas.set({ x: parseFloat(x), y: parseFloat(y) });
+  setCoords(x?: string | number, y?: string | number, opts: ToWorldOption = {}) {
+    const hasX = x || x === 0;
+    const hasY = y || y === 0;
+    const coords = {
+      x: this.canvas.get('x'),
+      y: this.canvas.get('y'),
+    };
+
+    if (hasX) coords.x = parseFloat(`${x}`);
+    if (hasY) coords.y = parseFloat(`${y}`);
+
+    if (opts.toWorld) {
+      const delta = this.canvasView?.getViewportDelta();
+      if (delta) {
+        if (hasX) coords.x = coords.x - delta.x;
+        if (hasY) coords.y = coords.y - delta.y;
+      }
+    }
+
+    this.canvas.set(coords);
+
     return this;
   }
 
@@ -611,7 +644,7 @@ export default class CanvasModule extends Module<CanvasConfig> {
    * const coords = canvas.getCoords();
    * // { x: 100, y: 100 }
    */
-  getCoords(): { x: number; y: number } {
+  getCoords(): Coordinates {
     const { x, y } = this.canvas.attributes;
     return { x, y };
   }
@@ -623,6 +656,10 @@ export default class CanvasModule extends Module<CanvasConfig> {
   getZoomMultiplier() {
     const zoom = this.getZoomDecimal();
     return zoom ? 1 / zoom : 1;
+  }
+
+  fitViewport(opts?: FitViewportOptions) {
+    this.canvasView?.fitViewport(opts);
   }
 
   toggleFramesEvents(on: boolean) {
@@ -658,6 +695,14 @@ export default class CanvasModule extends Module<CanvasConfig> {
    */
   addFrame(props = {}, opts = {}) {
     return this.canvas.frames.add(new Frame(this, { ...props }), opts);
+  }
+
+  /**
+   * Get the last created Component from a drag & drop to the canvas.
+   * @returns {[Component]|undefined}
+   */
+  getLastDragResult(): Component | undefined {
+    return this.em.get('dragResult');
   }
 
   destroy() {

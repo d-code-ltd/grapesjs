@@ -74,11 +74,16 @@ import PropertyFactory from './model/PropertyFactory';
 import SectorsView from './view/SectorsView';
 import { ItemManagerModule } from '../abstract/Module';
 import EditorModel from '../editor/model/Editor';
-import Property, { PropertyProps, StyleProps } from './model/Property';
+import Property, { PropertyProps } from './model/Property';
 import Component from '../dom_components/model/Component';
 import CssRule from '../css_composer/model/CssRule';
-import StyleableModel from '../domain_abstract/model/StyleableModel';
+import StyleableModel, { StyleProps } from '../domain_abstract/model/StyleableModel';
 import { CustomPropertyView } from './view/PropertyView';
+import { PropertySelectProps } from './model/PropertySelect';
+import { PropertyNumberProps } from './model/PropertyNumber';
+import { PropertyStackProps } from './model/PropertyStack';
+
+export type PropertyTypes = PropertyStackProps | PropertySelectProps | PropertyNumberProps;
 
 export type StyleManagerEvent =
   | 'style:sector:add'
@@ -89,7 +94,7 @@ export type StyleManagerEvent =
   | 'style:property:update'
   | 'style:target';
 
-type StyleTarget = StyleableModel;
+export type StyleTarget = StyleableModel;
 
 export const evAll = 'style';
 export const evPfx = `${evAll}:`;
@@ -109,7 +114,7 @@ export type StyleModuleParam<T extends keyof StyleManager, N extends number> = P
 
 const propDef = (value: any) => value || value === 0;
 
-const events = {
+const stylesEvents = {
   all: evAll,
   sectorAdd: evSectorAdd,
   sectorRemove: evSectorRemove,
@@ -130,6 +135,7 @@ export default class StyleManager extends ItemManagerModule<
   builtIn: PropertyFactory;
   upAll: Debounced;
   properties: typeof Properties;
+  events!: typeof stylesEvents;
   sectors: Sectors;
   SectView!: SectorsView;
   Sector = Sector;
@@ -149,7 +155,7 @@ export default class StyleManager extends ItemManagerModule<
    * @private
    */
   constructor(em: EditorModel) {
-    super(em, 'StyleManager', new Sectors([], { em }), events, defaults);
+    super(em, 'StyleManager', new Sectors([], { em }), stylesEvents, defaults);
     bindAll(this, '__clearStateTarget');
     const c = this.config;
     const ppfx = c.pStylePrefix;
@@ -301,7 +307,7 @@ export default class StyleManager extends ItemManagerModule<
    *   ],
    * }, { at: 0 });
    */
-  addProperty(sectorId: string, property: PropertyProps, opts: AddOptions = {}): Property | undefined {
+  addProperty(sectorId: string, property: PropertyTypes, opts: AddOptions = {}): Property | undefined {
     const sector = this.getSector(sectorId, { warn: true });
     let prop = null;
     if (sector) prop = sector.addProperty(property, opts);
@@ -441,8 +447,8 @@ export default class StyleManager extends ItemManagerModule<
    * By default, the Style Manager shows styles of the last selected target.
    * @returns {[Component]|[CSSRule]|null}
    */
-  getSelected() {
-    return this.model.get('lastTarget') || null;
+  getSelected(): StyleTarget | undefined {
+    return this.model.get('lastTarget');
   }
 
   /**
@@ -450,14 +456,14 @@ export default class StyleManager extends ItemManagerModule<
    * @returns {Array<[Component]|[CSSRule]>}
    */
   getSelectedAll() {
-    return this.model.get('targets') as Array<StyleTarget>;
+    return this.model.get('targets') as StyleTarget[];
   }
 
   /**
    * Get parent rules of the last selected target.
    * @returns {Array<[CSSRule]>}
    */
-  getSelectedParents(): Array<CssRule> {
+  getSelectedParents(): CssRule[] {
     return this.model.get('lastTargetParents') || [];
   }
 
@@ -474,9 +480,12 @@ export default class StyleManager extends ItemManagerModule<
    */
   addStyleTargets(style: StyleProps, opts: any) {
     this.getSelectedAll().map(t => t.addStyle(style, opts));
+    const target = this.getSelected();
+
+    // Trigger style changes on selected components
+    target && this.__emitCmpStyleUpdate(style);
 
     // Update state rule
-    const target = this.getSelected();
     const targetState = this.__getStateTarget();
     target && targetState?.setStyle(target.getStyle(), opts);
   }
@@ -712,6 +721,26 @@ export default class StyleManager extends ItemManagerModule<
   _logNoSector(sectorId: string) {
     const { em } = this;
     em && em.logWarning(`'${sectorId}' sector not found`);
+  }
+
+  __emitCmpStyleUpdate(style: StyleProps, opts: { components?: Component | Component[] } = {}) {
+    const { em } = this;
+    const event = 'component:styleUpdate';
+
+    // Ignore partial updates
+    if (!style.__p) {
+      const cmp = opts.components || em.getSelectedAll();
+      const cmps = Array.isArray(cmp) ? cmp : [cmp];
+      const newStyle = { ...style };
+      delete newStyle.__p;
+      const styleKeys = Object.keys(newStyle);
+      const optsToPass = { style: newStyle };
+
+      cmps.forEach(component => {
+        em.trigger(event, component, optsToPass);
+        styleKeys.forEach(key => em.trigger(`${event}:${key}`, component, optsToPass));
+      });
+    }
   }
 
   __upProps(opts = {}) {
